@@ -119,6 +119,13 @@ export default function AdminPage() {
         setActionLoading('creating')
         const dateTime = `${newEvent.date}T${newEvent.time}:00`
 
+        console.log('[Admin] Creating event with payload:', {
+            title: newEvent.title,
+            date: dateTime,
+            type: newEvent.type,
+            created_by: profile?.id
+        })
+
         const { error } = await supabase.from('events').insert({
             title: newEvent.title,
             description: newEvent.description || null,
@@ -134,8 +141,9 @@ export default function AdminPage() {
         })
 
         if (error) {
-            console.error('Event creation error:', error)
-            toast.error(`Erro ao criar evento: ${error.message}`)
+            console.error('[Admin] Event creation error:', error)
+            toast.error(`Erro: ${error.message} (${error.code})`)
+            console.log('[Admin] Full error object:', JSON.stringify(error, null, 2))
         } else {
             toast.success('Evento criado com sucesso!')
             setCreateDialogOpen(false)
