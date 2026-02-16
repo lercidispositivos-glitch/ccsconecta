@@ -30,50 +30,22 @@ export async function updateSession(request: NextRequest) {
     )
 
     // IMPORTANT: Do NOT run code between createServerClient and
-    // supabase.auth.getUser(). A simple mistake could make it
-    // very hard to debug issues with users being randomly logged out.
+    // supabase.auth.getUser(). A simple mistake could make it very
+    // hard to debug issues with users being randomly logged out.
 
-    let user = null
-    try {
-        const { data, error } = await supabase.auth.getUser()
-        if (error) {
-            // If the refresh token is invalid/expired, clear the auth cookies
-            // so the user can start fresh
-            console.error('[Middleware] Auth error:', error.message)
+    const { data: { user }, error } = await supabase.auth.getUser()
 
-            // Clear all supabase auth cookies to prevent the error loop
-            const response = NextResponse.next({ request })
-            request.cookies.getAll().forEach((cookie) => {
-                if (cookie.name.startsWith('sb-')) {
-                    response.cookies.delete(cookie.name)
-                }
-            })
-
-            // If trying to access protected routes, redirect to login
-            if (
-                !request.nextUrl.pathname.startsWith('/login') &&
-                !request.nextUrl.pathname.startsWith('/auth') &&
-                request.nextUrl.pathname !== '/'
-            ) {
-                const url = request.nextUrl.clone()
-                url.pathname = '/login'
-                const redirectResponse = NextResponse.redirect(url)
-                request.cookies.getAll().forEach((cookie) => {
-                    if (cookie.name.startsWith('sb-')) {
-                        redirectResponse.cookies.delete(cookie.name)
-                    }
-                })
-                return redirectResponse
+    if (error) {
+        // Auth error (e.g. invalid refresh token) — clear stale cookies
+        const allCookies = request.cookies.getAll()
+        for (const cookie of allCookies) {
+            if (cookie.name.startsWith('sb-')) {
+                supabaseResponse.cookies.delete(cookie.name)
             }
-
-            return response
         }
-        user = data.user
-    } catch (err) {
-        console.error('[Middleware] Unexpected auth error:', err)
     }
 
-    // If user is not logged in and trying to access protected routes
+    // Not logged in → redirect protected routes to /login
     if (
         !user &&
         !request.nextUrl.pathname.startsWith('/login') &&
@@ -85,7 +57,7 @@ export async function updateSession(request: NextRequest) {
         return NextResponse.redirect(url)
     }
 
-    // If user is logged in and on login page, redirect to dashboard
+    // Logged in on /login → redirect to /dashboard
     if (user && request.nextUrl.pathname === '/login') {
         const url = request.nextUrl.clone()
         url.pathname = '/dashboard'

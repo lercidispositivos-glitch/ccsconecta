@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import type { User } from '@supabase/supabase-js'
+import type { User, Session } from '@supabase/supabase-js'
 import type { Profile } from '@/lib/types/database'
 
 interface AuthContextType {
@@ -22,7 +22,7 @@ const AuthContext = createContext<AuthContextType>({
     refreshProfile: async () => { },
 })
 
-// Get the singleton client at module level — safe because it's a singleton
+// Module-level singleton — never recreated by React
 const supabase = createClient()
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -31,117 +31,73 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [loading, setLoading] = useState(true)
     const router = useRouter()
 
-    const fetchProfile = useCallback(async (userId: string) => {
-        try {
-            const { data, error } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', userId)
-                .single()
+    const fetchProfile = useCallback(async (userId: string): Promise<Profile | null> => {
+        const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single()
 
-            if (error) {
-                console.error('[Auth] Error fetching profile:', error.message)
-                setProfile(null)
-            } else {
-                setProfile(data as Profile | null)
-            }
-        } catch (err) {
-            console.error('[Auth] Profile fetch failed:', err)
-            setProfile(null)
+        if (error) {
+            console.warn('[Auth] Profile fetch error:', error.message)
+            return null
         }
+        return data as Profile
     }, [])
 
-    const refreshProfile = useCallback(async () => {
-        if (user) {
-            await fetchProfile(user.id)
-        }
-    }, [user, fetchProfile])
-
+    // Single effect that handles everything
     useEffect(() => {
-        let mounted = true
+        // 1. Get initial session
+        supabase.auth.getSession().then(async ({ data: { session } }: { data: { session: Session | null } }) => {
+            const currentUser = session?.user ?? null
+            setUser(currentUser)
 
-        const initialize = async () => {
-            try {
-                const { data: { session }, error } = await supabase.auth.getSession()
-
-                if (!mounted) return
-
-                if (error) {
-                    console.error('[Auth] getSession error:', error.message)
-                }
-
-                const currentUser = session?.user ?? null
-                setUser(currentUser)
-
-                if (currentUser) {
-                    await fetchProfile(currentUser.id)
-                }
-            } catch (err) {
-                console.error('[Auth] Session check failed:', err)
-                if (mounted) {
-                    setUser(null)
-                    setProfile(null)
-                }
-            } finally {
-                if (mounted) {
-                    setLoading(false)
-                }
+            if (currentUser) {
+                const p = await fetchProfile(currentUser.id)
+                setProfile(p)
             }
-        }
 
-        initialize()
+            setLoading(false)
+        }).catch(() => {
+            setLoading(false)
+        })
 
+        // 2. Listen for auth changes (login, logout, token refresh)
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (event: string, session: { user: User } | null) => {
-                if (!mounted) return
-
-                console.log('[Auth] State change:', event)
-
+            async (_event: string, session: Session | null) => {
                 const currentUser = session?.user ?? null
                 setUser(currentUser)
 
-                if (event === 'SIGNED_OUT') {
-                    setProfile(null)
-                    setLoading(false)
-                    return
-                }
-
                 if (currentUser) {
-                    await fetchProfile(currentUser.id)
+                    const p = await fetchProfile(currentUser.id)
+                    setProfile(p)
                 } else {
                     setProfile(null)
                 }
 
-                if (mounted) {
-                    setLoading(false)
-                }
-
-                if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-                    router.refresh()
-                }
+                setLoading(false)
             }
         )
 
         return () => {
-            mounted = false
             subscription.unsubscribe()
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
+    }, [fetchProfile])
 
-    const signOut = async () => {
-        setLoading(true)
-        try {
-            await supabase.auth.signOut()
-        } catch (err) {
-            console.error('[Auth] Sign out error:', err)
-        }
+    const signOut = useCallback(async () => {
+        await supabase.auth.signOut()
         setUser(null)
         setProfile(null)
-        setLoading(false)
         router.push('/login')
         router.refresh()
-    }
+    }, [router])
+
+    const refreshProfile = useCallback(async () => {
+        if (user) {
+            const p = await fetchProfile(user.id)
+            setProfile(p)
+        }
+    }, [user, fetchProfile])
 
     return (
         <AuthContext.Provider value={{ user, profile, loading, signOut, refreshProfile }}>
